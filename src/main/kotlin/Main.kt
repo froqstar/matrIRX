@@ -5,22 +5,27 @@ import io.kamax.matrix.client.regular.MatrixHttpClient
 import io.kamax.matrix.client.regular.SyncOptions
 import io.kamax.matrix.hs._MatrixRoom
 import io.kamax.matrix.json.event.MatrixJsonRoomMessageEvent
+import java.io.File
 
 const val EVENT_TYPE_MESSAGE = "m.room.message"
+const val TOKEN_FILE_NAME = "token.txt"
+const val CREDENTIALS_FILE_NAME = "credentials.txt"
 
-val matrixUserName = ""
-val matrixPassword = ""
-
-val users = hashMapOf<String, Unit>()
+private val users = hashMapOf<String, Unit>()
+private var matrixUserName: String? = null
 
 fun main(args: Array<String>) {
+    val credentialsFileContent = File(CREDENTIALS_FILE_NAME).readText()
+    matrixUserName = credentialsFileContent.split(":")[0].trim()
+    val matrixPassword = credentialsFileContent.split(":")[1].trim()
 
     val client = MatrixHttpClient("matrix.org")
     client.discoverSettings()
     client.login(MatrixPasswordCredentials(matrixUserName, matrixPassword))
 
-    // We will update this after each sync call
-    var syncToken: String? = null
+    val tokenFile = File(TOKEN_FILE_NAME)
+    val tokenFileContent = tokenFile.readText().trim()
+    var syncToken: String? = if (tokenFileContent.isNotEmpty()) tokenFileContent else null
 
     // We sync until the process is interrupted via Ctrl+C or a signal
     while (!Thread.currentThread().isInterrupted) {
@@ -33,7 +38,8 @@ fun main(args: Array<String>) {
             processRoomMessages(client, joinedRoom)
         }
 
-        syncToken = data.nextBatchToken();
+        syncToken = data.nextBatchToken()
+        tokenFile.writeText(syncToken)
     }
 }
 
