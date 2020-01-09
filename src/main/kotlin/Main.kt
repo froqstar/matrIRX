@@ -1,3 +1,4 @@
+import io.kamax.matrix.client.MatrixClientRequestException
 import io.kamax.matrix.client.MatrixPasswordCredentials
 import io.kamax.matrix.client._MatrixClient
 import io.kamax.matrix.client._SyncData
@@ -15,7 +16,7 @@ const val EVENT_TYPE_MESSAGE = "m.room.message"
 const val TOKEN_FILE_NAME = "token.txt"
 const val CREDENTIALS_FILE_NAME = "credentials.txt"
 const val IRC_CHANNEL_FILE_NAME = "irc_channel.txt"
-const val IRC_USER_NAME_SUFFIX = "@matrix"
+const val IRC_USER_NAME_SUFFIX = ":matrix"
 const val IRC_USER_NAME = "the_future"
 const val DELIMITER = ":"
 
@@ -44,6 +45,7 @@ fun main(args: Array<String>) {
     }
 
     ircClient = Client.builder()
+        .user(IRC_USER_NAME)
         .nick(IRC_USER_NAME)
         .server()
         .host(ircServerAddress!!)
@@ -58,6 +60,8 @@ fun main(args: Array<String>) {
     val tokenFile = File(TOKEN_FILE_NAME)
     val tokenFileContent = tokenFile.readText().trim()
     var syncToken: String? = if (tokenFileContent.isNotEmpty()) tokenFileContent else null
+    // token caching is still buggy
+    syncToken = ""
 
     // We sync until the process is interrupted via Ctrl+C or a signal
     matrixClient?.run {
@@ -81,10 +85,11 @@ fun main(args: Array<String>) {
 class ChannelJoinEventListener {
     @Handler
     fun onUserJoinChannel(event: ChannelJoinEvent) {
-        println("User ${event.actor.nick} joined the IRC channel")
+        println("IRC: User ${event.actor.nick} joined the IRC channel")
+        println("IRC: observed from client \"${event.client.nick}\"")
         if (!event.actor.nick.contains(IRC_USER_NAME_SUFFIX)) {
             // legacy user joined, forward to matrix
-            //matrixClient?.getRoom(matrixRoomId)?.sendText("${event.actor.nick} joined the legacy channel.")
+            forwardMessageToMatrix("--> ${event.actor.nick} joined the IRC channel <--")
         }
     }
 }
@@ -92,11 +97,10 @@ class ChannelJoinEventListener {
 class ChannelMessageEventListener {
     @Handler
     fun onChannelMessage(event: ChannelMessageEvent) {
-        println("Processing IRC channel message \"${event.message}\" from user \"${event.actor.nick}\"")
+        println("IRC: Processing IRC channel message \"${event.message}\" from user \"${event.actor.nick}\"")
         if (!event.actor.nick.contains(IRC_USER_NAME_SUFFIX)) {
-            println("Is a message from legacy user, forwarding to matrix")
             // message from legacy user, forward to matrix
-            matrixClient?.getRoom(matrixRoomId)?.sendText("${event.actor.nick}: ${event.message}")
+            forwardMessageToMatrix("${event.actor.nick}: ${event.message}")
         }
     }
 }
@@ -105,14 +109,22 @@ fun processRoomUsers(room: _MatrixRoom) {
     room.joinedUsers.forEach { userProfile ->
         if (userProfile.name.isPresent && !users.containsKey(userProfile.name.get())) {
             val userName = userProfile.name.get()
-            println("added new user \"${userName}\"")
+            println("MATRIX: added new user \"${userName}\"")
+            val ircUserName = userName + IRC_USER_NAME_SUFFIX
 
             val client = Client.builder()
-                .nick(userName + IRC_USER_NAME_SUFFIX)
+                .user(ircUserName)
+                .nick(ircUserName)
                 .server()
                 .host(ircServerAddress!!)
                 .then()
+                .apply {
+                    listeners().input {
+                        println("IRC: $userName: $it")
+                    }
+                }
                 .buildAndConnect()
+            client.eventManager.registerEventListener(ChannelJoinEventListener())
             client.addChannel(ircChannelName)
 
             users[userName] = client
@@ -122,7 +134,7 @@ fun processRoomUsers(room: _MatrixRoom) {
 
 fun processRoomMessages(client: _MatrixClient, joinedRoom: _SyncData.JoinedRoom) {
     val room = client.getRoom(joinedRoom.id)
-    println("checking room \"${room.name.get()}\"")
+    println("MATRIX: checking room \"${room.name.get()}\"")
 
     joinedRoom.timeline.events.forEach { event ->
         if (event.type == EVENT_TYPE_MESSAGE) {
@@ -130,10 +142,8 @@ fun processRoomMessages(client: _MatrixClient, joinedRoom: _SyncData.JoinedRoom)
             val content = message.body
             val userName = message.sender.id
             val shortName = userName.split(":").first().removePrefix("@")
-            if (shortName == matrixUserName) {
-                println("ignoring message \"$content\" from myself.")
-            } else {
-                println("processed message \"$content\" from user \"$shortName\"")
+            if (shortName != matrixUserName) {
+                println("MATRIX: processed message \"$content\" from user \"$shortName\"")
                 forwardMessageToIRC(shortName, content)
             }
         }
@@ -141,9 +151,16 @@ fun processRoomMessages(client: _MatrixClient, joinedRoom: _SyncData.JoinedRoom)
 }
 
 fun forwardMessageToIRC(userName: String, content: String) {
-    println("Trying to send message \"$content\" to IRC channel $ircChannelName")
     users[userName]?.run {
         this.sendMessage(ircChannelName!!, content)
-        println("Successfully sent message \"$content\" to IRC channel $ircChannelName from user $userName")
+        println("IRC: sent message \"$content\" to IRC channel $ircChannelName from user $userName")
+    }
+}
+
+fun forwardMessageToMatrix(message: String) {
+    try {
+        matrixClient?.getRoom(matrixRoomId)?.sendText(message)
+    } catch (e: MatrixClientRequestException) {
+        println("MATRIX: Failed to forward message \"$message\" to matrix channel: ${e.message}")
     }
 }
