@@ -16,7 +16,7 @@ const val EVENT_TYPE_MESSAGE = "m.room.message"
 const val TOKEN_FILE_NAME = "token.txt"
 const val CREDENTIALS_FILE_NAME = "credentials.txt"
 const val IRC_CHANNEL_FILE_NAME = "irc_channel.txt"
-const val IRC_USER_NAME_SUFFIX = ":matrix"
+const val IRC_USER_NAME_SUFFIX = "|matrix"
 const val IRC_USER_NAME = "the_future"
 const val DELIMITER = ":"
 
@@ -61,23 +61,27 @@ fun main(args: Array<String>) {
     val tokenFileContent = tokenFile.readText().trim()
     var syncToken: String? = if (tokenFileContent.isNotEmpty()) tokenFileContent else null
     // token caching is still buggy
-    syncToken = ""
+    syncToken = null
 
     // We sync until the process is interrupted via Ctrl+C or a signal
     matrixClient?.run {
         while (!Thread.currentThread().isInterrupted) {
-            val data = this.sync(SyncOptions.build().setSince(syncToken).get())
+            try {
+                val data = this.sync(SyncOptions.build().setSince(syncToken).get())
 
-            data.rooms.joined.forEach { joinedRoom ->
-                matrixRoomId = joinedRoom.id
-                val room = this.getRoom(joinedRoom.id)
+                data.rooms.joined.forEach { joinedRoom ->
+                    matrixRoomId = joinedRoom.id
+                    val room = this.getRoom(joinedRoom.id)
 
-                processRoomUsers(room)
-                processRoomMessages(this, joinedRoom)
+                    processRoomUsers(room)
+                    processRoomMessages(this, joinedRoom)
+                }
+
+                syncToken = data.nextBatchToken()
+                tokenFile.writeText(syncToken!!)
+            } catch (e: MatrixClientRequestException) {
+                println("MATRIX: Sync failed: ${e.message}")
             }
-
-            syncToken = data.nextBatchToken()
-            tokenFile.writeText(syncToken!!)
         }
     }
 }
@@ -107,7 +111,7 @@ class ChannelMessageEventListener {
 
 fun processRoomUsers(room: _MatrixRoom) {
     room.joinedUsers.forEach { userProfile ->
-        if (userProfile.name.isPresent && !users.containsKey(userProfile.name.get())) {
+        if (userProfile.name.isPresent && !users.containsKey(userProfile.name.get()) && userProfile.name.get() != matrixUserName) {
             val userName = userProfile.name.get()
             println("MATRIX: added new user \"${userName}\"")
             val ircUserName = userName + IRC_USER_NAME_SUFFIX
@@ -124,7 +128,6 @@ fun processRoomUsers(room: _MatrixRoom) {
                     }
                 }
                 .buildAndConnect()
-            client.eventManager.registerEventListener(ChannelJoinEventListener())
             client.addChannel(ircChannelName)
 
             users[userName] = client
