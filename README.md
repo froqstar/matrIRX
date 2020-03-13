@@ -6,6 +6,8 @@ This is a pipe that connects an IRC channel to a Matrix channel.
 That is, it posts all messages posted to a given IRC channel to a given Matrix channel, and vise versa. 
 As a result, you can make an IRC channel available to Matrix clients.
 
+Also, it is super ugly and hacky code. My apologies to the reader.
+
 ## How does it do it?
 
 Internally, it just uses two bots: One IRC bot, and one Matrix bot, and exchanges the posted messages between them.
